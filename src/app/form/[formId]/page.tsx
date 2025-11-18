@@ -89,6 +89,19 @@ export default function FormPage() {
     fetchForm();
   }, [fetchForm]);
 
+  // Handle navigation after successful submission
+  useEffect(() => {
+    if (success) {
+      const timeoutId = setTimeout(() => {
+        router.push(`/${formId}/results`);
+      }, 2000);
+      
+      return () => {
+        clearTimeout(timeoutId);
+      };
+    }
+  }, [success, formId, router]);
+
   const handleFieldChange = (fieldId: string, value: any) => {
     setFormData((prev) => ({ ...prev, [fieldId]: value }));
   };
@@ -100,8 +113,12 @@ export default function FormPage() {
     value: any
   ) => {
     setDynamicFormData((prev) => {
-      const fieldArray = prev[fieldId] || [{}];
+      const fieldArray = prev[fieldId] || [];
       const updated = [...fieldArray];
+      // Ensure updated[index] is an object (initialize as {} if undefined)
+      if (!updated[index]) {
+        updated[index] = {};
+      }
       updated[index] = { ...updated[index], [subFieldId]: value };
       return { ...prev, [fieldId]: updated };
     });
@@ -156,7 +173,7 @@ export default function FormPage() {
               }
             }
           } else if (field.type === "checkbox") {
-            if (!formData[field.id]) {
+            if (formData[field.id] !== true) {
               setError(`${field.label} is required`);
               return;
             }
@@ -194,9 +211,6 @@ export default function FormPage() {
       }
 
       setSuccess(true);
-      setTimeout(() => {
-        router.push(`/${formId}/results`);
-      }, 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to submit form");
       setSubmitting(false);

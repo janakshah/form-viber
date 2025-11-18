@@ -26,15 +26,20 @@ const Dropdown = React.forwardRef<HTMLSelectElement, DropdownProps>(
       helperText,
       placeholder = "Select an option",
       className = "",
+      id,
       ...props
     },
     ref
   ) => {
+    // Generate a stable fallback ID if id is not provided
+    const generatedId = React.useId();
+    const selectId = id || generatedId;
+    
     return (
       <div className="w-full">
         {label && (
           <label
-            htmlFor={props.id}
+            htmlFor={selectId}
             className="block text-sm font-medium text-black dark:text-white mb-1.5"
           >
             {label}
@@ -46,6 +51,7 @@ const Dropdown = React.forwardRef<HTMLSelectElement, DropdownProps>(
         <div className="relative">
           <select
             ref={ref}
+            id={selectId}
             className={`
               w-full px-4 py-2.5 pr-10
               bg-white dark:bg-black

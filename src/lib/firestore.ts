@@ -1,4 +1,4 @@
-import { getFirestore, collection, doc, setDoc, getDoc, getDocs, addDoc, query, where, orderBy, Timestamp } from "firebase/firestore";
+import { getFirestore, collection, doc, setDoc, getDoc, getDocs, addDoc, query, where, orderBy, limit, startAfter, Timestamp, type DocumentSnapshot, type QueryDocumentSnapshot } from "firebase/firestore";
 import { app } from "./firebase";
 
 const db = getFirestore(app);
@@ -60,11 +60,21 @@ function removeUndefined<T extends Record<string, unknown>>(obj: T): T {
 
 /**
  * Create a new form definition in Firestore
+ * 
+ * Note: This function will overwrite an existing document with the same formId.
+ * If you need to prevent accidental overwrites, check for existence first using getForm().
  */
 export async function createForm(formData: Omit<FormData, "createdAt" | "updatedAt">): Promise<FormData> {
   if (!formData.formId || typeof formData.formId !== "string" || formData.formId.trim() === "") {
     throw new Error("Invalid formId: formId must be a non-empty string");
   }
+  
+  // Check if document already exists to prevent accidental overwrite
+  const existingDoc = await getDoc(doc(db, "forms", formData.formId));
+  if (existingDoc.exists()) {
+    throw new Error(`Form with formId "${formData.formId}" already exists. Use updateForm() or delete the existing form first.`);
+  }
+  
   const now = Timestamp.now();
   const formDoc: FormData = {
     ...formData,
@@ -74,7 +84,7 @@ export async function createForm(formData: Omit<FormData, "createdAt" | "updated
 
   // Remove undefined values before saving (Firestore doesn't allow undefined)
   const cleanedFormDoc = removeUndefined(formDoc);
-  await setDoc(doc(db, "forms", formData.formId), cleanedFormDoc);
+  await setDoc(doc(db, "forms", formData.formId), cleanedFormDoc, { merge: false });
   return formDoc;
 }
 
@@ -155,12 +165,39 @@ export async function getForm(formId: string): Promise<FormData | null> {
 }
 
 /**
- * Get all forms
+ * Get all forms with pagination support
+ * 
+ * @param pageSize - Number of forms to fetch per page (default: 50)
+ * @param cursor - Optional cursor (DocumentSnapshot or null) for pagination. Use null/undefined for first page.
+ * @returns Object containing the forms array and nextCursor for subsequent pages
  */
-export async function getAllForms(): Promise<Array<{ formId: string; title?: string; createdAt: Timestamp }>> {
-  const formsQuery = query(collection(db, "forms"), orderBy("createdAt", "desc"));
+export async function getAllForms(
+  pageSize: number = 50,
+  cursor: QueryDocumentSnapshot | null | undefined = null
+): Promise<{
+  forms: Array<{ formId: string; title?: string; createdAt: Timestamp }>;
+  nextCursor: QueryDocumentSnapshot | null;
+}> {
+  // Validate inputs
+  if (pageSize <= 0 || pageSize > 1000) {
+    throw new Error("pageSize must be between 1 and 1000");
+  }
+
+  // Build query with orderBy and limit
+  let formsQuery = query(
+    collection(db, "forms"),
+    orderBy("createdAt", "desc"),
+    limit(pageSize)
+  );
+
+  // Add startAfter if cursor is provided
+  if (cursor) {
+    formsQuery = query(formsQuery, startAfter(cursor));
+  }
+
   const snapshot = await getDocs(formsQuery);
-  return snapshot.docs.map((doc) => {
+  
+  const forms = snapshot.docs.map((doc) => {
     const data = doc.data();
     return {
       formId: doc.id,
@@ -168,6 +205,16 @@ export async function getAllForms(): Promise<Array<{ formId: string; title?: str
       createdAt: data.createdAt,
     };
   });
+
+  // Return the last document as cursor for next page, or null if this is the last page
+  const nextCursor = snapshot.docs.length === pageSize 
+    ? snapshot.docs[snapshot.docs.length - 1] 
+    : null;
+
+  return {
+    forms,
+    nextCursor,
+  };
 }
 
 /**

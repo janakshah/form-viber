@@ -13,7 +13,7 @@ export function createGalileoClient(): ObservabilityClient {
   const projectName = process.env.GALILEO_PROJECT || "form-viber";
   const logStreamName = process.env.GALILEO_LOG_STREAM || "agent-calls";
 
-  let galileo: any = null;
+  let galileoLogger: any = null;
   let isInitialized = false;
 
   async function ensureInitialized() {
@@ -27,16 +27,31 @@ export function createGalileoClient(): ObservabilityClient {
 
     try {
       const galileoModule = await import("galileo");
-      galileo = galileoModule;
       
-      // Initialize Galileo with API key and project settings
-      if (galileo.init) {
-        await galileo.init({
+      // Instantiate GalileoLogger with API key, project, and log stream
+      // The SDK may export GalileoLogger or use a different initialization pattern
+      if (galileoModule.GalileoLogger) {
+        galileoLogger = new galileoModule.GalileoLogger({
           apiKey,
           project: projectName,
           logStream: logStreamName,
         });
+      } else if (galileoModule.galileoContext?.init) {
+        // Alternative initialization pattern
+        galileoModule.galileoContext.init(projectName, logStreamName);
+        galileoLogger = galileoModule;
+      } else {
+        // Fallback: try direct initialization
+        galileoLogger = galileoModule;
+        if (typeof galileoLogger.init === "function") {
+          await galileoLogger.init({
+            apiKey,
+            project: projectName,
+            logStream: logStreamName,
+          });
+        }
       }
+      
       isInitialized = true;
     } catch (error) {
       console.warn("Failed to initialize Galileo SDK:", error);
@@ -50,15 +65,17 @@ export function createGalileoClient(): ObservabilityClient {
 
       await ensureInitialized();
 
-      if (!apiKey || !galileo) {
+      if (!apiKey || !galileoLogger) {
         return; // Silently skip if not configured
       }
 
       try {
-        // Log the agent call as a workflow span
-        await galileo.log(
-          {
-            spanType: "workflow",
+        // Start a trace for the agent call
+        const trace = galileoLogger.startTrace?.();
+        
+        // Add workflow-level span
+        if (galileoLogger.addWorkflowSpan) {
+          galileoLogger.addWorkflowSpan({
             name: "agent-call",
             input: {
               text: input.text,
@@ -68,51 +85,50 @@ export function createGalileoClient(): ObservabilityClient {
             output: output
               ? {
                   text: output.text,
-                  tokens: output.metadata?.tokens,
                 }
               : undefined,
             error: error ? String(error) : undefined,
             metadata: {
               durationMs,
               sandboxId,
-              model: "gemini-2.5-flash",
+            },
+          });
+        }
+
+        // Add nested LLM call span
+        if (galileoLogger.addLlmSpan) {
+          galileoLogger.addLlmSpan({
+            name: "gemini-call",
+            model: "gemini-2.5-flash",
+            input: {
+              systemPrompt: definition.systemPrompt,
+              userInput: input.text,
+            },
+            output: output
+              ? {
+                  text: output.text,
+                }
+              : undefined,
+            error: error ? String(error) : undefined,
+            metadata: {
+              durationMs,
+              sandboxId,
               tokens: output?.metadata?.tokens,
             },
-          },
-          async () => {
-            // Nested LLM call span
-            await galileo.log(
-              {
-                spanType: "llm",
-                name: "gemini-call",
-                model: "gemini-2.5-flash",
-                input: {
-                  systemPrompt: definition.systemPrompt,
-                  userInput: input.text,
-                },
-                output: output
-                  ? {
-                      text: output.text,
-                      tokens: output.metadata?.tokens,
-                    }
-                  : undefined,
-                error: error ? String(error) : undefined,
-                metadata: {
-                  durationMs,
-                  sandboxId,
-                  tokens: output?.metadata?.tokens,
-                },
-              },
-              async () => ({})
-            );
-            return {};
-          }
-        );
+          });
+        }
+
+        // Conclude the trace
+        if (trace && typeof trace.conclude === "function") {
+          trace.conclude();
+        } else if (galileoLogger.conclude) {
+          galileoLogger.conclude();
+        }
 
         // Flush logs to ensure they're sent
-        if (galileo.flush) {
+        if (galileoLogger.flush) {
           try {
-            await galileo.flush();
+            await galileoLogger.flush();
           } catch (flushError) {
             // Flush errors are non-critical
             console.warn("[Galileo] Flush error (non-critical):", flushError);

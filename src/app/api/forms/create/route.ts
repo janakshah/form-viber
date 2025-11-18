@@ -36,9 +36,21 @@ export async function POST(request: NextRequest) {
     // Parse the JSON response
     let formData;
     try {
-      // Try to extract JSON from the response (might be wrapped in markdown code blocks)
-      const jsonMatch = result.text.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/) || result.text.match(/(\{[\s\S]*\})/);
-      const jsonString = jsonMatch ? jsonMatch[1] : result.text;
+      // Trim the response
+      let cleanedText = result.text.trim();
+      
+      // Remove markdown code block using non-greedy match
+      cleanedText = cleanedText.replace(/```(?:json)?\s*([\s\S]*?)\s*```/, "$1");
+      
+      // Locate the first '{' and the last '}' and extract the substring between them
+      const firstBrace = cleanedText.indexOf("{");
+      const lastBrace = cleanedText.lastIndexOf("}");
+      
+      if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+        throw new Error("No valid JSON object found in response");
+      }
+      
+      const jsonString = cleanedText.substring(firstBrace, lastBrace + 1);
       formData = JSON.parse(jsonString);
     } catch (parseError) {
       console.error("Failed to parse agent response:", result.text);
